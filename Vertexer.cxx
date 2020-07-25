@@ -8,109 +8,116 @@ constexpr float  Vertexer::kHugeF;
 constexpr float  Vertexer::kDefTukey;
 
 //______________________________________________
-bool Vertexer::FitVertex(std::vector<Vertexer::Track> &tracks, Vertexer::Vertex &vtx,
+bool Vertexer::fitVertex(gsl::span<Vertexer::Track> tracks, gsl::span<int> idxsort, Vertex &vtx, 
 			 float &scaleSigma2, bool useConstraint, bool fillErrors)
 {
   // fit vertex taking provided vertex as a seed
+  // tracks pool may contain arbitrary number of tracks, only those which are in the idxsort (indices of tracks sorted in time)
+  // will be used.
   
-  int ntAcc=0,ntr = tracks.size();
-  if (ntr<2) return false;
+  int ntAcc=0,ntr = idxsort.size();
+  if (ntr<mMinTracksPerVtx) return false;
   //
-  double wghSum=0,wghChi2=0; 
-  double cxx=0,cxy=0,cxz=0,cx0=0,cyy=0,cyz=0,cy0=0,czz=0,cz0=0;
-  float scaleSig2ITuk2I = mTukey2I/scaleSigma2;
+  Weights cumw;
+  cumw.setScale(scaleSigma2, mTukey2I);
   //
-  for (int itr=ntr;itr--;) {
-    Track &trc = tracks[itr];
-    if (!trc.CanUse()) continue;
-    /* check stamps compatibility
-    if (mCheckStamps) {
-      if (!CheckVertexTrackStamps(vtx,trc)) continue; // the track is invalidated or out of range, skip
+  int it = 100;
+  while(it-- && cumw.scaleSigma2>0.5) {
+    for (int i : idxsort) {
+      if (tracks[i].canUse()) {
+        accountTrack(tracks[i], vtx, cumw);
+      }
     }
-    */
-    float dy,dz, chi2T = trc.getResiduals(vtx, dy, dz); // track-vertex residuals and chi2
-    float wghT = (1.f-chi2T*scaleSig2ITuk2I);           // weighted distance to vertex
-    if (wghT<kAlmost0F)  {
-      trc.wgh = 0.f;
-      continue;
+    //
+    if (cumw.nTracks<mMinTracksPerVtx) {
+      if (upscale(cumw)) {
+        continue; // redo with stronger rescaling
+      }
     }
-    float syyI(trc.sig2YI),szzI(trc.sig2ZI),syzI(trc.sigYZI);
+    if (useConstraint) {
+      applyConstraint(cumw);
+    }
+    if (!solveVertex(vtx, cumw, fillErrors)) {
+      return false;
+    }
+    vtx.print();
+    printf("Sigma: %e T: %e\n",cumw.scaleSigma2, cumw.tstamp);
+    cumw.resetForNewIteration(mTukey2I);
+  }
+  return true;
+}
+
+//___________________________________________________________________
+void Vertexer::accountTrack(Vertexer::Track &trc, Vertex &vtx, Vertexer::Weights &cumw) const
+{
+  float dy,dz, chi2T = trc.getResiduals(vtx, dy, dz); // track-vertex residuals and chi2
+  float wghT = (1.f-chi2T*cumw.scaleSig2ITuk2I);           // weighted distance to vertex
+  if (wghT<kAlmost0F)  {
+    trc.wgh = 0.f;
+    return;
+  }
+  float syyI(trc.sig2YI),szzI(trc.sig2ZI),syzI(trc.sigYZI);
     
-    wghSum  += wghT;
-    wghChi2 += wghT*chi2T;
-    //
-    syyI *= wghT;
-    syzI *= wghT;
-    szzI *= wghT;
-    trc.wgh = wghT;
-    //
-    // aux variables
-    double tmpSP = trc.sinAlp*trc.tgP, tmpCP = trc.cosAlp*trc.tgP
-      ,tmpSC = trc.sinAlp+tmpCP, tmpCS = -trc.cosAlp+tmpSP
-      ,tmpCL = trc.cosAlp*trc.tgL, tmpSL = trc.sinAlp*trc.tgL
-      ,tmpYXP = trc.y-trc.tgP*trc.x, tmpZXL = trc.z-trc.tgL*trc.x
-      ,tmpCLzz = tmpCL*szzI, tmpSLzz = tmpSL*szzI, tmpSCyz = tmpSC*syzI, tmpCSyz = tmpCS*syzI
-      ,tmpCSyy = tmpCS*syyI, tmpSCyy = tmpSC*syyI, tmpSLyz = tmpSL*syzI, tmpCLyz = tmpCL*syzI;
-    //
-    // symmetric matrix equation 
-    cxx += tmpCL*(tmpCLzz+tmpSCyz+tmpSCyz)+tmpSC*tmpSCyy;          // dchi^2/dx/dx
-    cxy += tmpCL*(tmpSLzz+tmpCSyz)+tmpSL*tmpSCyz+tmpSC*tmpCSyy;    // dchi^2/dx/dy
-    cxz += -trc.sinAlp*syzI-tmpCLzz-tmpCP*syzI;                   // dchi^2/dx/dz
-    cx0 += -(tmpCLyz+tmpSCyy)*tmpYXP-(tmpCLzz+tmpSCyz)*tmpZXL;     // RHS 
-    //
-    cyy += tmpSL*(tmpSLzz+tmpCSyz+tmpCSyz)+tmpCS*tmpCSyy;          // dchi^2/dy/dy
-    cyz += -(tmpCSyz+tmpSLzz);                                     // dchi^2/dy/dz
-    cy0 += -tmpYXP*(tmpCSyy+tmpSLyz)-tmpZXL*(tmpCSyz+tmpSLzz);     // RHS
-    //
-    czz += szzI;                                                    // dchi^2/dz/dz
-    cz0 += tmpZXL*szzI+tmpYXP*syzI;                                 // RHS
-    //
-    vtx.tstamp = float(vtx.tstamp*ntAcc + trc.tstamp*100)/(1+ntAcc);
-    ntAcc++;
-  }
+  cumw.wghSum  += wghT;
+  cumw.wghChi2 += wghT*chi2T;
   //
-  vtx.nTracks = ntAcc;
-  if (ntAcc<mMinTracksPerVtx) return false;
+  syyI *= wghT;
+  syzI *= wghT;
+  szzI *= wghT;
+  trc.wgh = wghT;
   //
-  if (useConstraint) {
-    // impose meanVertex constraint, i.e. account terms (V_i-Constrain_i)^2/sig2constr_i for i=X,Y 
-    // in the fit chi2 definition
-    cxx += mXYConstraintInvErr[0];
-    cx0 += mXYConstraintInvErr[0]*mXYConstraint[0];
-    cyy += mXYConstraintInvErr[1];
-    cy0 += mXYConstraintInvErr[1]*mXYConstraint[1];
-  }
-  ROOT::Math::SMatrix<double, 3, 3, ROOT::Math::MatRepSym<double, 3>> mat;  
-  mat(0,0) = cxx;
-  mat(0,1) = cxy;
-  mat(0,2) = cxz;
-  mat(1,1) = cyy;
-  mat(1,2) = cyz;
-  mat(2,2) = czz;
+  // aux variables
+  double tmpSP = trc.sinAlp*trc.tgP, tmpCP = trc.cosAlp*trc.tgP
+    ,tmpSC = trc.sinAlp+tmpCP, tmpCS = -trc.cosAlp+tmpSP
+    ,tmpCL = trc.cosAlp*trc.tgL, tmpSL = trc.sinAlp*trc.tgL
+    ,tmpYXP = trc.y-trc.tgP*trc.x, tmpZXL = trc.z-trc.tgL*trc.x
+    ,tmpCLzz = tmpCL*szzI, tmpSLzz = tmpSL*szzI, tmpSCyz = tmpSC*syzI, tmpCSyz = tmpCS*syzI
+    ,tmpCSyy = tmpCS*syyI, tmpSCyy = tmpSC*syyI, tmpSLyz = tmpSL*syzI, tmpCLyz = tmpCL*syzI;
+  //
+  // symmetric matrix equation 
+  cumw.cxx += tmpCL*(tmpCLzz+tmpSCyz+tmpSCyz)+tmpSC*tmpSCyy;          // dchi^2/dx/dx
+  cumw.cxy += tmpCL*(tmpSLzz+tmpCSyz)+tmpSL*tmpSCyz+tmpSC*tmpCSyy;    // dchi^2/dx/dy
+  cumw.cxz += -trc.sinAlp*syzI-tmpCLzz-tmpCP*syzI;                   // dchi^2/dx/dz
+  cumw.cx0 += -(tmpCLyz+tmpSCyy)*tmpYXP-(tmpCLzz+tmpSCyz)*tmpZXL;     // RHS 
+  //
+  cumw.cyy += tmpSL*(tmpSLzz+tmpCSyz+tmpCSyz)+tmpCS*tmpCSyy;          // dchi^2/dy/dy
+  cumw.cyz += -(tmpCSyz+tmpSLzz);                                     // dchi^2/dy/dz
+  cumw.cy0 += -tmpYXP*(tmpCSyy+tmpSLyz)-tmpZXL*(tmpCSyz+tmpSLzz);     // RHS
+  //
+  cumw.czz += szzI;                                                    // dchi^2/dz/dz
+  cumw.cz0 += tmpZXL*szzI+tmpYXP*syzI;                                 // RHS
+  //
+  cumw.tstamp = float(cumw.tstamp*cumw.nTracks + trc.tstamp)/(1+cumw.nTracks);
+  cumw.nTracks++;
+}
+
+//___________________________________________________________________
+bool Vertexer::solveVertex(Vertex &vtx, Vertexer::Weights &cumw, bool fillErrors) const
+{
+  ROOT::Math::SMatrix<double, 3, 3, ROOT::Math::MatRepSym<double, 3>> mat;
+  mat(0,0) = cumw.cxx;
+  mat(0,1) = cumw.cxy;
+  mat(0,2) = cumw.cxz;
+  mat(1,1) = cumw.cyy;
+  mat(1,2) = cumw.cyz;
+  mat(2,2) = cumw.czz;
   if (!mat.InvertFast()) {
     printf("Failed to invert matrix\n");
     std::cout << mat << "\n";
     return false;
   }
-  ROOT::Math::SVector<double, 3> rhs(cx0,cy0,cz0);
+  ROOT::Math::SVector<double, 3> rhs(cumw.cx0, cumw.cy0, cumw.cz0);
   auto sol = mat*rhs;
-  for (int i=3;i--;) {
-    vtx.xyz[i] = sol(i);
-  }    
+  vtx.setXYZ(sol(0),sol(1),sol(2));
   if (fillErrors) {
-    vtx.cov[0] = mat(0,0);
-    vtx.cov[1] = mat(1,0);
-    vtx.cov[2] = mat(1,1);
-    vtx.cov[3] = mat(2,0);
-    vtx.cov[4] = mat(2,1);
-    vtx.cov[5] = mat(2,2);
-    vtx.nTracks = ntAcc;
-    vtx.chi2 = 2.f*(ntAcc-wghSum)/scaleSig2ITuk2I;         // calculate chi^2
+    vtx.setCov(mat(0,0), mat(1,0), mat(1,1), mat(2,0), mat(2,1), mat(2,2));
   }
-  scaleSigma2 = wghChi2/wghSum;
+  vtx.setNContributors(cumw.nTracks);
+  vtx.setChi2( 2.f*(cumw.nTracks-cumw.wghSum)/cumw.scaleSig2ITuk2I );         // calculate chi^2
+  cumw.scaleSigma2 = cumw.wghChi2/cumw.wghSum;
   return true;
 }
-
+  
 //___________________________________________________________________
 void Vertexer::setConstraint(float x, float y, float sigyy, float sigyz, float sigzz)
 {
