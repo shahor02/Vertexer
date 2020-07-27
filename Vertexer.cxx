@@ -8,15 +8,16 @@ constexpr float  Vertexer::kHugeF;
 constexpr float  Vertexer::kDefTukey;
 
 //______________________________________________
-bool Vertexer::fitVertex(gsl::span<Vertexer::Track> tracks, gsl::span<int> idxsort, Vertex &vtx, float scaleSigma2,
-                         bool useConstraint, bool fillErrors)
-{
+bool Vertexer::fitVertex(gsl::span<Vertexer::Track> tracks,
+                         gsl::span<int> idxsort, Vertex &vtx, float scaleSigma2,
+                         bool useConstraint, bool fillErrors) {
   // fit vertex taking provided vertex as a seed
-  // tracks pool may contain arbitrary number of tracks, only those which are in the idxsort (indices of tracks sorted in time)
-  // will be used.
-  
-  int ntAcc=0,ntr = idxsort.size();
-  if (ntr<mMinTracksPerVtx) return false;
+  // tracks pool may contain arbitrary number of tracks, only those which are in
+  // the idxsort (indices of tracks sorted in time) will be used.
+
+  int ntAcc = 0, ntr = idxsort.size();
+  if (ntr < mMinTracksPerVtx)
+    return false;
   //
   VertexSeed vtxseed(vtx, useConstraint, fillErrors);
   vtxseed.setScale(scaleSigma2, mTukey2I);
@@ -25,31 +26,28 @@ bool Vertexer::fitVertex(gsl::span<Vertexer::Track> tracks, gsl::span<int> idxso
   FitStatus result;
   int it = mMaxIterations;
   bool found = false;
-  while(it-- && vtxseed.scaleSigma2>mMinScale2) {
+  while (it-- && vtxseed.scaleSigma2 > mMinScale2) {
     vtxseed.resetForNewIteration();
     result = fitIteration(tracks, idxsort, vtxseed);
-    
+
     if (result == FitStatus::OK) {
       found = stopIterations(vtxseed, vtx);
       vtx.print();
-      LOG(INFO) << "#" << it << " Sigma: " << vtxseed.scaleSigma2 << " T: " << vtx.getTimeStamp();
+      LOG(INFO) << "#" << it << " Sigma: " << vtxseed.scaleSigma2
+                << " T: " << vtx.getTimeStamp();
       if (found) {
         break;
       }
-    }
-    else if (result == FitStatus::NotEnoughTracks) {
+    } else if (result == FitStatus::NotEnoughTracks) {
       if (upscaleSigma(vtxseed)) {
         LOG(INFO) << "Upscaling scale to " << vtxseed.scaleSigma2;
         continue; // redo with stronger rescaling
-      }
-      else {
+      } else {
         break;
       }
-    }
-    else if (result == FitStatus::PoolEmpty || result == FitStatus::Failure) {
+    } else if (result == FitStatus::PoolEmpty || result == FitStatus::Failure) {
       break;
-    }
-    else {
+    } else {
       LOG(FATAL) << "Unknown fit status " << int(result);
     }
   }
@@ -57,17 +55,20 @@ bool Vertexer::fitVertex(gsl::span<Vertexer::Track> tracks, gsl::span<int> idxso
 }
 
 //___________________________________________________________________
-Vertexer::FitStatus Vertexer::fitIteration(gsl::span<Vertexer::Track> tracks, gsl::span<int> idxsort, Vertexer::VertexSeed &vtxseed) const
-{
+Vertexer::FitStatus
+Vertexer::fitIteration(gsl::span<Vertexer::Track> tracks,
+                       gsl::span<int> idxsort,
+                       Vertexer::VertexSeed &vtxseed) const {
   int nTested = 0;
   for (int i : idxsort) {
     if (tracks[i].canUse()) {
       nTested++;
       accountTrack(tracks[i], vtxseed);
-    }    
+    }
   }
   if (vtxseed.getNContributors() < mMinTracksPerVtx) {
-    return nTested<mMinTracksPerVtx ? FitStatus::PoolEmpty : FitStatus::NotEnoughTracks;
+    return nTested < mMinTracksPerVtx ? FitStatus::PoolEmpty
+                                      : FitStatus::NotEnoughTracks;
   }
   if (vtxseed.useConstraint) {
     applyConstraint(vtxseed);
@@ -78,20 +79,22 @@ Vertexer::FitStatus Vertexer::fitIteration(gsl::span<Vertexer::Track> tracks, gs
   return FitStatus::OK;
 }
 
-
 //___________________________________________________________________
-void Vertexer::accountTrack(Vertexer::Track &trc, Vertexer::VertexSeed &vtxseed) const
-{
-  float dy,dz, chi2T = trc.getResiduals(vtxseed, dy, dz); // track-vertex residuals and chi2
-  float wghT = (1.f-chi2T*vtxseed.scaleSig2ITuk2I);           // weighted distance to vertex
-  if (wghT<kAlmost0F)  {
+void Vertexer::accountTrack(Vertexer::Track &trc,
+                            Vertexer::VertexSeed &vtxseed) const {
+  float dy, dz,
+      chi2T =
+          trc.getResiduals(vtxseed, dy, dz); // track-vertex residuals and chi2
+  float wghT =
+      (1.f - chi2T * vtxseed.scaleSig2ITuk2I); // weighted distance to vertex
+  if (wghT < kAlmost0F) {
     trc.wgh = 0.f;
     return;
   }
-  float syyI(trc.sig2YI),szzI(trc.sig2ZI),syzI(trc.sigYZI);
-    
-  vtxseed.wghSum  += wghT;
-  vtxseed.wghChi2 += wghT*chi2T;
+  float syyI(trc.sig2YI), szzI(trc.sig2ZI), syzI(trc.sigYZI);
+
+  vtxseed.wghSum += wghT;
+  vtxseed.wghChi2 += wghT * chi2T;
   //
   syyI *= wghT;
   syzI *= wghT;
@@ -99,46 +102,54 @@ void Vertexer::accountTrack(Vertexer::Track &trc, Vertexer::VertexSeed &vtxseed)
   trc.wgh = wghT;
   //
   // aux variables
-  double tmpSP = trc.sinAlp*trc.tgP, tmpCP = trc.cosAlp*trc.tgP
-    ,tmpSC = trc.sinAlp+tmpCP, tmpCS = -trc.cosAlp+tmpSP
-    ,tmpCL = trc.cosAlp*trc.tgL, tmpSL = trc.sinAlp*trc.tgL
-    ,tmpYXP = trc.y-trc.tgP*trc.x, tmpZXL = trc.z-trc.tgL*trc.x
-    ,tmpCLzz = tmpCL*szzI, tmpSLzz = tmpSL*szzI, tmpSCyz = tmpSC*syzI, tmpCSyz = tmpCS*syzI
-    ,tmpCSyy = tmpCS*syyI, tmpSCyy = tmpSC*syyI, tmpSLyz = tmpSL*syzI, tmpCLyz = tmpCL*syzI;
+  double tmpSP = trc.sinAlp * trc.tgP, tmpCP = trc.cosAlp * trc.tgP,
+         tmpSC = trc.sinAlp + tmpCP, tmpCS = -trc.cosAlp + tmpSP,
+         tmpCL = trc.cosAlp * trc.tgL, tmpSL = trc.sinAlp * trc.tgL,
+         tmpYXP = trc.y - trc.tgP * trc.x, tmpZXL = trc.z - trc.tgL * trc.x,
+         tmpCLzz = tmpCL * szzI, tmpSLzz = tmpSL * szzI, tmpSCyz = tmpSC * syzI,
+         tmpCSyz = tmpCS * syzI, tmpCSyy = tmpCS * syyI, tmpSCyy = tmpSC * syyI,
+         tmpSLyz = tmpSL * syzI, tmpCLyz = tmpCL * syzI;
   //
-  // symmetric matrix equation 
-  vtxseed.cxx += tmpCL*(tmpCLzz+tmpSCyz+tmpSCyz)+tmpSC*tmpSCyy;          // dchi^2/dx/dx
-  vtxseed.cxy += tmpCL*(tmpSLzz+tmpCSyz)+tmpSL*tmpSCyz+tmpSC*tmpCSyy;    // dchi^2/dx/dy
-  vtxseed.cxz += -trc.sinAlp*syzI-tmpCLzz-tmpCP*syzI;                    // dchi^2/dx/dz
-  vtxseed.cx0 += -(tmpCLyz+tmpSCyy)*tmpYXP-(tmpCLzz+tmpSCyz)*tmpZXL;     // RHS 
+  // symmetric matrix equation
+  vtxseed.cxx +=
+      tmpCL * (tmpCLzz + tmpSCyz + tmpSCyz) + tmpSC * tmpSCyy; // dchi^2/dx/dx
+  vtxseed.cxy += tmpCL * (tmpSLzz + tmpCSyz) + tmpSL * tmpSCyz +
+                 tmpSC * tmpCSyy;                             // dchi^2/dx/dy
+  vtxseed.cxz += -trc.sinAlp * syzI - tmpCLzz - tmpCP * syzI; // dchi^2/dx/dz
+  vtxseed.cx0 +=
+      -(tmpCLyz + tmpSCyy) * tmpYXP - (tmpCLzz + tmpSCyz) * tmpZXL; // RHS
   //
-  vtxseed.cyy += tmpSL*(tmpSLzz+tmpCSyz+tmpCSyz)+tmpCS*tmpCSyy;          // dchi^2/dy/dy
-  vtxseed.cyz += -(tmpCSyz+tmpSLzz);                                     // dchi^2/dy/dz
-  vtxseed.cy0 += -tmpYXP*(tmpCSyy+tmpSLyz)-tmpZXL*(tmpCSyz+tmpSLzz);     // RHS
+  vtxseed.cyy +=
+      tmpSL * (tmpSLzz + tmpCSyz + tmpCSyz) + tmpCS * tmpCSyy; // dchi^2/dy/dy
+  vtxseed.cyz += -(tmpCSyz + tmpSLzz);                         // dchi^2/dy/dz
+  vtxseed.cy0 +=
+      -tmpYXP * (tmpCSyy + tmpSLyz) - tmpZXL * (tmpCSyz + tmpSLzz); // RHS
   //
-  vtxseed.czz += szzI;                                                    // dchi^2/dz/dz
-  vtxseed.cz0 += tmpZXL*szzI+tmpYXP*syzI;                                 // RHS
+  vtxseed.czz += szzI;                          // dchi^2/dz/dz
+  vtxseed.cz0 += tmpZXL * szzI + tmpYXP * syzI; // RHS
   //
-  auto& timeV = vtxseed.getTimeStamp();
-  auto& timeT = trc.timeEst;
-  auto trErr2I = 1./(timeT.getTimeStampError()*timeT.getTimeStampError());
-  auto tAv = timeV.getTimeStamp() * timeV.getTimeStampError() + wghT*timeT.getTimeStamp()*trErr2I; // <t_prev>*(1/err_prev)^2 [until end of the fit we keep inverse error^2]
-  auto tAvE = timeV.getTimeStampError() + wghT*trErr2I;
-  timeV.setTimeStamp( tAv / tAvE);
-  timeV.setTimeStampError( tAvE );
+  auto &timeV = vtxseed.getTimeStamp();
+  auto &timeT = trc.timeEst;
+  auto trErr2I = 1. / (timeT.getTimeStampError() * timeT.getTimeStampError());
+  auto tAv = timeV.getTimeStamp() * timeV.getTimeStampError() +
+             wghT * timeT.getTimeStamp() *
+                 trErr2I; // <t_prev>*(1/err_prev)^2 [until end of the fit we
+                          // keep inverse error^2]
+  auto tAvE = timeV.getTimeStampError() + wghT * trErr2I;
+  timeV.setTimeStamp(tAv / tAvE);
+  timeV.setTimeStampError(tAvE);
   vtxseed.addContributor();
 }
 
 //___________________________________________________________________
-bool Vertexer::solveVertex(Vertexer::VertexSeed &vtxseed) const
-{
+bool Vertexer::solveVertex(Vertexer::VertexSeed &vtxseed) const {
   ROOT::Math::SMatrix<double, 3, 3, ROOT::Math::MatRepSym<double, 3>> mat;
-  mat(0,0) = vtxseed.cxx;
-  mat(0,1) = vtxseed.cxy;
-  mat(0,2) = vtxseed.cxz;
-  mat(1,1) = vtxseed.cyy;
-  mat(1,2) = vtxseed.cyz;
-  mat(2,2) = vtxseed.czz;
+  mat(0, 0) = vtxseed.cxx;
+  mat(0, 1) = vtxseed.cxy;
+  mat(0, 2) = vtxseed.cxz;
+  mat(1, 1) = vtxseed.cyy;
+  mat(1, 2) = vtxseed.cyz;
+  mat(2, 2) = vtxseed.czz;
   if (!mat.InvertFast()) {
     printf("Failed to invert matrix\n");
     std::cout << mat << "\n";
@@ -146,55 +157,63 @@ bool Vertexer::solveVertex(Vertexer::VertexSeed &vtxseed) const
   }
   ROOT::Math::SVector<double, 3> rhs(vtxseed.cx0, vtxseed.cy0, vtxseed.cz0);
   auto sol = mat*rhs;
-  vtxseed.setXYZ(sol(0),sol(1),sol(2));
+  vtxseed.setXYZ(sol(0), sol(1), sol(2));
   if (vtxseed.fillErrors) {
-    vtxseed.setCov(mat(0,0), mat(1,0), mat(1,1), mat(2,0), mat(2,1), mat(2,2));
+    vtxseed.setCov(mat(0, 0), mat(1, 0), mat(1, 1), mat(2, 0), mat(2, 1),
+                   mat(2, 2));
   }
-  vtxseed.setChi2( 2.f*(vtxseed.getNContributors() - vtxseed.wghSum)/vtxseed.scaleSig2ITuk2I );         // calculate chi^2
-  auto newScale = vtxseed.wghChi2/vtxseed.wghSum;
-  vtxseed.setScale(newScale<mMinScale2 ? mMinScale2 : newScale, mTukey2I);
+  vtxseed.setChi2(2.f * (vtxseed.getNContributors() - vtxseed.wghSum) /
+                  vtxseed.scaleSig2ITuk2I); // calculate chi^2
+  auto newScale = vtxseed.wghChi2 / vtxseed.wghSum;
+  vtxseed.setScale(newScale < mMinScale2 ? mMinScale2 : newScale, mTukey2I);
   return true;
 }
 
 //___________________________________________________________________
-bool Vertexer::stopIterations(VertexSeed &vtxSeed, Vertex &vtx) const
-{
+bool Vertexer::stopIterations(VertexSeed &vtxSeed, Vertex &vtx) const {
   // decide if new iteration should be done, prepare next one if needed
   // if scaleSigma2 reached its lower limit stop
   bool stop = false;
-  while(1) {
-    if (vtxSeed.scaleSigma2 <= mMinScale2+kAlmost0F) {
+  while (1) {
+    if (vtxSeed.scaleSigma2 <= mMinScale2 + kAlmost0F) {
       stop = true;
-      LOG(INFO) << "stop on simga :" << vtxSeed.scaleSigma2 << " prev: " << vtxSeed.scaleSigma2Prev;
+      LOG(INFO) << "stop on simga :" << vtxSeed.scaleSigma2
+                << " prev: " << vtxSeed.scaleSigma2Prev;
       //      break;
     }
     auto dchi = (vtx.getChi2() - vtxSeed.getChi2()) / vtxSeed.getChi2();
-    if (dchi>0 && dchi<mMaxChi2Change) {
+    if (dchi > 0 && dchi < mMaxChi2Change) {
       stop = true;
       LOG(INFO) << "stop on chi2 :";
       //      break;
     }
-    auto dx = vtxSeed.getX() - vtx.getX(), dy = vtxSeed.getY() - vtx.getY(), dz = vtxSeed.getZ() - vtx.getZ();
-    auto dst = std::sqrt(dx*dx + dy*dy + dz*dz);
+    auto dx = vtxSeed.getX() - vtx.getX(), dy = vtxSeed.getY() - vtx.getY(),
+         dz = vtxSeed.getZ() - vtx.getZ();
+    auto dst = std::sqrt(dx * dx + dy * dy + dz * dz);
 
-    LOG(INFO) << "dChi:" << vtx.getChi2() << "->" << vtxSeed.getChi2() << " :-> " << dchi;
-    LOG(INFO) << "dx: " << dx << " dy: " << dy << " dz: " << dz << " -> " << dst;
-    
+    LOG(INFO) << "dChi:" << vtx.getChi2() << "->" << vtxSeed.getChi2()
+              << " :-> " << dchi;
+    LOG(INFO) << "dx: " << dx << " dy: " << dy << " dz: " << dz << " -> "
+              << dst;
+
     break;
   }
 
   vtx = vtxSeed;
-  auto& vTStamp = vtx.getTimeStamp();
-  if (vTStamp.getTimeStampError()>0) {
-    vTStamp.setTimeStampError(1./std::sqrt(vTStamp.getTimeStampError())); // seed accumulates inverse squared error!
+  auto &vTStamp = vtx.getTimeStamp();
+  if (vTStamp.getTimeStampError() > 0) {
+    vTStamp.setTimeStampError(
+        1. / std::sqrt(vTStamp.getTimeStampError())); // seed accumulates
+                                                      // inverse squared error!
   }
   if (!stop) {
-    auto scforce = vtxSeed.scaleSigma2Prev*0.5;
+    auto scforce = vtxSeed.scaleSigma2Prev * 0.5;
     if (vtxSeed.scaleSigma2 > scforce) {
       auto sav = vtxSeed.scaleSigma2Prev;
       vtxSeed.setScale(scforce < mMinScale2 ? mMinScale2 : scforce, mTukey2I);
       vtxSeed.scaleSigma2Prev = sav;
-      LOG(INFO) << "Forcing scale from " << vtxSeed.scaleSigma2Prev << " to " << vtxSeed.scaleSigma2;
+      LOG(INFO) << "Forcing scale from " << vtxSeed.scaleSigma2Prev << " to "
+                << vtxSeed.scaleSigma2;
     }
   }
 
