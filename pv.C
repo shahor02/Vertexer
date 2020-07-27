@@ -7,6 +7,7 @@
 #include "ReconstructionDataFormats/DCA.h"
 #include "ReconstructionDataFormats/MatchInfoTOF.h"
 #include "CommonDataFormat/TimeStamp.h"
+#include "CommonDataFormat/RangeReference.h"
 #include "DetectorsCommonDataFormats/NameConf.h"
 #include "DetectorsBase/Propagator.h"
 #include "DetectorsBase/GeometryManager.h"
@@ -17,7 +18,11 @@
 
 #include "Vertexer.h"
 
-using TimeEst = o2::dataformats::TimeStampWithError<float, float>;
+
+namespace o2d = o2::dataformats;
+
+using V2TRef = o2d::RangeReference<int, int>;
+using TimeEst = o2d::TimeStampWithError<float, float>;
 using TrackVF = Vertexer::Track;
 using Track = o2::track::TrackParCov;
 
@@ -33,8 +38,6 @@ struct TrackV {
 TH1F* ht = nullptr;
 TH1F* he = nullptr;
 
-namespace o2d = o2::dataformats;
-
 //------------------------------------------
 // will be taken from DPL input
 std::vector<o2d::TrackTPCITS> *mITSTPCtracksPtr = nullptr;
@@ -47,6 +50,11 @@ gsl::span<o2d::MatchInfoTOF> mTOFTracks;
 o2d::VertexBase mMeanVertex;
 std::vector<TrackVF> mTracksPool;
 std::vector<int> mSortID;
+
+
+std::vector<Vertex> mVertices;
+std::vector<int> mVertexTrackIDs;
+std::vector<V2TRef> mV2TRefs;
 
 float mBz = 0;
 
@@ -145,6 +153,19 @@ void createTracksPool()
   
 }
 
+void finalizeVertex(Vertex vtx, gsl::span<TrackVF> pool, gsl::span<int> idxsort)
+{
+  int lastID = mVertices.size();
+  mVertices.emplace_back(vtx);
+  auto& ref = mV2TRefs.emplace_back( mVertexTrackIDs.size(), 0);
+  for (int i : idxsort) {
+    if (pool[i].canAssign()) {
+      mVertexTrackIDs.push_back(pool[i].entry);
+      pool[i].vtxID = lastID;
+    }
+  }
+  ref.setEntries(vtx.getNContributors());
+}
 
 void fitVertex(Vertexer& vtf, gsl::span<TrackVF> pool, gsl::span<int> idxsort)
 {
@@ -152,6 +173,6 @@ void fitVertex(Vertexer& vtf, gsl::span<TrackVF> pool, gsl::span<int> idxsort)
   Vertex vtx;
   float scaleSigma2 = 100;
   while (vtf.fitVertex(pool, idxsort, vtx, scaleSigma2, false, false)) {
-    
+    finalizeVertex(vtx, pool, idxsort);
   }
 }
