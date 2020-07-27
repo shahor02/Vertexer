@@ -2,10 +2,10 @@
 #include "Math/SMatrix.h"
 #include "Math/SVector.h"
 
-constexpr float  Vertexer::kAlmost0F;
+constexpr float Vertexer::kAlmost0F;
 constexpr double Vertexer::kAlmost0D;
-constexpr float  Vertexer::kHugeF;
-constexpr float  Vertexer::kDefTukey;
+constexpr float Vertexer::kHugeF;
+constexpr float Vertexer::kDefTukey;
 
 //______________________________________________
 bool Vertexer::fitVertex(gsl::span<Vertexer::Track> tracks,
@@ -156,7 +156,7 @@ bool Vertexer::solveVertex(Vertexer::VertexSeed &vtxseed) const {
     return false;
   }
   ROOT::Math::SVector<double, 3> rhs(vtxseed.cx0, vtxseed.cy0, vtxseed.cz0);
-  auto sol = mat*rhs;
+  auto sol = mat * rhs;
   vtxseed.setXYZ(sol(0), sol(1), sol(2));
   if (vtxseed.fillErrors) {
     vtxseed.setCov(mat(0, 0), mat(1, 0), mat(1, 1), mat(2, 0), mat(2, 1),
@@ -221,24 +221,24 @@ bool Vertexer::stopIterations(VertexSeed &vtxSeed, Vertex &vtx) const {
 }
 
 //___________________________________________________________________
-void Vertexer::setConstraint(float x, float y, float sigyy, float sigyz, float sigzz)
-{
-  // set mean vertex constraint and its errors 
+void Vertexer::setConstraint(float x, float y, float sigyy, float sigyz,
+                             float sigzz) {
+  // set mean vertex constraint and its errors
   mXYConstraint[0] = x;
   mXYConstraint[1] = y;
-  double det = sigyy*sigzz - sigyz*sigyz;
-  if (det<=kAlmost0D || sigyy<kAlmost0D || sigzz<kAlmost0D) {
-    printf("Error: wrong settings for vertex constraint: %e %e | %e %e %e\n",x,y,sigyy,sigyz,sigzz);
+  double det = sigyy * sigzz - sigyz * sigyz;
+  if (det <= kAlmost0D || sigyy < kAlmost0D || sigzz < kAlmost0D) {
+    printf("Error: wrong settings for vertex constraint: %e %e | %e %e %e\n", x,
+           y, sigyy, sigyz, sigzz);
     exit(1);
   }
   mXYConstraintInvErr[0] = sigzz / det;
   mXYConstraintInvErr[2] = sigyy / det;
-  mXYConstraintInvErr[1] =-sigyz / det;
+  mXYConstraintInvErr[1] = -sigyz / det;
 }
 
 //______________________________________________
-float Vertexer::getTukey() const
-{
+float Vertexer::getTukey() const {
   // convert 1/tukey^2 to tukey
-  return sqrtf(1./mTukey2I);
+  return sqrtf(1. / mTukey2I);
 }

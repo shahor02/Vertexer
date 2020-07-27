@@ -14,57 +14,58 @@ using Vertex = o2::dataformats::Vertex<TimeEst>;
 
 class Vertexer {
 
- public:
-   enum class FitStatus : int { Failure, PoolEmpty, NotEnoughTracks, OK };
+public:
+  enum class FitStatus : int { Failure, PoolEmpty, NotEnoughTracks, OK };
 
-   ///< weights and scaling params for current vertex
-   struct VertexSeed : public Vertex {
-     double wghSum = 0.;  // sum of tracks weights
-     double wghChi2 = 0.; // sum of tracks weighted chi2's
-     double cxx = 0., cyy = 0., czz = 0., cxy = 0., cxz = 0., cyz = 0.,
-            cx0 = 0., cy0 = 0., cz0 = 0.; // elements of lin.equation matrix
-     float scaleSigma2 = 1.e9;            // Tukey scaling parameter
-     float scaleSigma2Prev = 1.;
-     float scaleSig2ITuk2I =
-         0; // inverse squared Tukey parameter scaled by scaleSigma2
-     bool useConstraint = true;
-     bool fillErrors = true;
+  ///< weights and scaling params for current vertex
+  struct VertexSeed : public Vertex {
+    double wghSum = 0.;  // sum of tracks weights
+    double wghChi2 = 0.; // sum of tracks weighted chi2's
+    double cxx = 0., cyy = 0., czz = 0., cxy = 0., cxz = 0., cyz = 0., cx0 = 0.,
+           cy0 = 0., cz0 = 0.; // elements of lin.equation matrix
+    float scaleSigma2 = 1.e9;  // Tukey scaling parameter
+    float scaleSigma2Prev = 1.;
+    float scaleSig2ITuk2I =
+        0; // inverse squared Tukey parameter scaled by scaleSigma2
+    bool useConstraint = true;
+    bool fillErrors = true;
 
-     void setScale(float scale2, float tukey2I) {
-       scaleSigma2Prev = scaleSigma2;
-       scaleSigma2 = scale2;
-       scaleSig2ITuk2I = tukey2I / scale2;
-     }
+    void setScale(float scale2, float tukey2I) {
+      scaleSigma2Prev = scaleSigma2;
+      scaleSigma2 = scale2;
+      scaleSig2ITuk2I = tukey2I / scale2;
+    }
 
-     void resetForNewIteration() {
-       setNContributors(0);
-       setTimeStamp({0., 0.});
-       wghSum = 0;
-       wghChi2 = 0;
-       cxx = cyy = czz = cxy = cxz = cyz = cx0 = cy0 = cz0 = 0.;
-     }
+    void resetForNewIteration() {
+      setNContributors(0);
+      setTimeStamp({0., 0.});
+      wghSum = 0;
+      wghChi2 = 0;
+      cxx = cyy = czz = cxy = cxz = cyz = cx0 = cy0 = cz0 = 0.;
+    }
 
-     VertexSeed() = default;
-     VertexSeed(const Vertex &vtx, bool _constraint, bool _errors)
-         : Vertex(vtx), useConstraint(_constraint), fillErrors(_errors) {}
-   };
+    VertexSeed() = default;
+    VertexSeed(const Vertex &vtx, bool _constraint, bool _errors)
+        : Vertex(vtx), useConstraint(_constraint), fillErrors(_errors) {}
+  };
 
   struct Track {
     /** Straight track parameterization in the frame defined by alpha angle.
-	Assumed to be defined in the proximity to vertex, so that the straight-line
-	extrapolation Y=mY+mTgP*(x-mX) and Z=mZ+mTgL*(x-mX) is precise
+        Assumed to be defined in the proximity to vertex, so that the
+       straight-line extrapolation Y=mY+mTgP*(x-mX) and Z=mZ+mTgL*(x-mX) is
+       precise
     */
-    enum {kUsed, kNoVtx=-1,kDiscarded=kNoVtx-1};
-    float x;           ///< reference X
-    float y;           ///< Y at X
-    float z;           ///< Z at X
-    float sig2YI;      ///< YY component of inverse cov.matrix
-    float sig2ZI;      ///< ZZ component of inverse cov.matrix
-    float sigYZI;      ///< YZ component of inverse cov.matrix
-    float tgP;         ///< tangent(phi) in tracking frame
-    float tgL;         ///< tangent(lambda)
-    float cosAlp;      ///< cos of alpha frame
-    float sinAlp;      ///< sin of alpha frame
+    enum { kUsed, kNoVtx = -1, kDiscarded = kNoVtx - 1 };
+    float x;      ///< reference X
+    float y;      ///< Y at X
+    float z;      ///< Z at X
+    float sig2YI; ///< YY component of inverse cov.matrix
+    float sig2ZI; ///< ZZ component of inverse cov.matrix
+    float sigYZI; ///< YZ component of inverse cov.matrix
+    float tgP;    ///< tangent(phi) in tracking frame
+    float tgL;    ///< tangent(lambda)
+    float cosAlp; ///< cos of alpha frame
+    float sinAlp; ///< sin of alpha frame
 
     TimeEst timeEst;
     float wgh = 0.; ///< track weight wrt current vertex seed
@@ -79,16 +80,15 @@ class Vertexer {
     bool canUse(float zmin, float zmax) const {
       return canUse() && (z > zmin && z < zmax);
     }
-    bool operator < (const Track& trc) const {return z<trc.z;}
+    bool operator<(const Track &trc) const { return z < trc.z; }
 
-    float getResiduals(const Vertex& vtx, float& dy, float& dz) const
-    {
+    float getResiduals(const Vertex &vtx, float &dy, float &dz) const {
       // get residuals (Y and Z DCA in track frame) and calculate chi2
       float dx = vtx.getX() * cosAlp + vtx.getY() * sinAlp -
                  x; // VX rotated to track frame - trackX
       dy = y + tgP * dx - (-vtx.getX() * sinAlp + vtx.getY() * cosAlp);
       dz = z + tgP * dx - vtx.getZ();
-      return 0.5f*(dy*dy*sig2YI  + dz*dz*sig2ZI) + dy*dz*sigYZI;
+      return 0.5f * (dy * dy * sig2YI + dz * dz * sig2ZI) + dy * dz * sigYZI;
     }
 
     Track() = default;
@@ -115,8 +115,10 @@ class Vertexer {
                          Vertexer::VertexSeed &vtxseed) const;
   void setConstraint(float x, float y, float sigyy, float sigyz, float sigzz);
 
-  void  setTukey(float t)  {mTukey2I = t>0.f ? 1.f/(t*t) : 1.f/(kDefTukey*kDefTukey);}
-  float getTukey()   const;
+  void setTukey(float t) {
+    mTukey2I = t > 0.f ? 1.f / (t * t) : 1.f / (kDefTukey * kDefTukey);
+  }
+  float getTukey() const;
 
   float getMinScale2() const { return mMinScale2; }
   void setMinScale2(float v) { mMinScale2 = v < 0.01 ? 1. : v; }
@@ -155,23 +157,24 @@ private:
     return false;
   }
 
-  std::array<float,2> mXYConstraint = {0.f,0.f};               ///< nominal vertex constraint
-  std::array<float,3> mXYConstraintInvErr = {1.0f, 0.f, 1.0f}; ///< nominal vertex constraint inverted errors^2
+  std::array<float, 2> mXYConstraint = {0.f,
+                                        0.f}; ///< nominal vertex constraint
+  std::array<float, 3> mXYConstraintInvErr = {
+      1.0f, 0.f, 1.0f}; ///< nominal vertex constraint inverted errors^2
   //
-  float mTukey2I = 1./(kDefTukey*kDefTukey);                ///< 1./[Tukey parameter]^2
-  float mMinScale2 = 1.;        ///< min slaling factor^2
-  float mMaxScale2 = 1.e6;      ///< max slaling factor^2
+  float mTukey2I = 1. / (kDefTukey * kDefTukey); ///< 1./[Tukey parameter]^2
+  float mMinScale2 = 1.;                         ///< min slaling factor^2
+  float mMaxScale2 = 1.e6;                       ///< max slaling factor^2
   float mMaxChi2Change = 0.001; ///< max chi2 change to continue iterations
 
-  int mMinTracksPerVtx = 2;                                 ///< min N tracks per vertex
-  int mMaxIterations = 100; ///< max iterations per vertex fit
-  static constexpr float kDefTukey = 5.0f;                  ///< def.value for tukey constant
-  static constexpr float kHugeF = 1.e12;                    ///< very large float
-  static constexpr float kAlmost0F = 1e-12;                 ///< tiny float
-  static constexpr double kAlmost0D = 1e-16;                ///< tiny double
+  int mMinTracksPerVtx = 2;                  ///< min N tracks per vertex
+  int mMaxIterations = 100;                  ///< max iterations per vertex fit
+  static constexpr float kDefTukey = 5.0f;   ///< def.value for tukey constant
+  static constexpr float kHugeF = 1.e12;     ///< very large float
+  static constexpr float kAlmost0F = 1e-12;  ///< tiny float
+  static constexpr double kAlmost0D = 1e-16; ///< tiny double
 
-  ClassDefNV(Vertexer,1);
+  ClassDefNV(Vertexer, 1);
 };
-
 
 #endif
