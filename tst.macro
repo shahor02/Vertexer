@@ -1,0 +1,9 @@
+.L Vertexer.cxx++g
+.L pv.C++g
+Vertexer vtf
+Vertex vtx
+float scaleSigma2 = 1000;
+pv("pbpbB25")
+gsl::span<int> sp(&mSortID[5889],1913);
+vtf.fitVertex(mTracksPool, sp, vtx, scaleSigma2, false, true)
+
