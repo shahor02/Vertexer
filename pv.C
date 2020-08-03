@@ -184,7 +184,7 @@ void createTracksPool() {
   ht = new TH1F("ht", "time", 10*(itmax - itmin + 1), itmin, itmax);
   htv = new TH1F("htv", "timeV", 10*(itmax - itmin + 1), itmin, itmax);
   he = new TH1F("et", "time er", 1000, 0, 2.);
-  htz = new TH2F("tz","t z", 3*(itmax - itmin + 1+2), itmin-1, itmax+1, 200, -20,20);
+  htz = new TH2F("tz","t z", 3*(itmax - itmin + 1+2), itmin-1, itmax+1, 2000, -20,20);
   for (auto i : mSortID) {
     ht->Fill(mTracksPool[i].timeEst.getTimeStamp());
     he->Fill(mTracksPool[i].timeEst.getTimeStampError());
@@ -200,6 +200,10 @@ void finalizeVertex(Vertex vtx, gsl::span<TrackVF> pool, gsl::span<int> idxsort)
     if (pool[i].canAssign()) {
       mVertexTrackIDs.push_back(pool[i].entry);
       pool[i].vtxID = lastID;
+      // remove track from ZSeeds histo
+      auto bin = getZSeedBin( pool[i].getZForXY(mXYConstraint[0],mXYConstraint[1]) );
+      //      mZSeedHisto[bin]--;
+      //      mZSeedsFilled--;
     }
   }
   ref.setEntries(vtx.getNContributors());

@@ -22,11 +22,13 @@ public:
     double sum  = 0.;
     double sum2 = 0.;
     double wsum = 0.;
+    int n = 0;
     void add(float v, float w=1.) {
       auto c = v*w;
       sum += c;
       sum2 += c*v;
       wsum += w;
+      n++;
     }
     double getMean() const { return wsum > 0. ? sum/wsum : 0.;}
     bool getMeanRMS2(double &mean, double &rms2) const
@@ -40,7 +42,17 @@ public:
       rms2 = sum2*wi - mean*mean;
       return true;
     }
-
+    bool getMeanRMS2(float &mean, float &rms2) const
+    {
+      if (!wsum) {
+        mean = rms2 = 0;
+        return false;
+      }
+      auto wi = 1./wsum;
+      mean = sum*wi;
+      rms2 = sum2*wi - mean*mean;
+      return true;      
+    }
     StatAccumulator& operator+=(const StatAccumulator& other) {
       sum += other.sum;
       sum2 += other.sum2;
@@ -56,6 +68,7 @@ public:
     
     void clear() {
       sum = sum2 = wsum = 0.;
+      n = 0;
     }
   };
   
@@ -71,7 +84,7 @@ public:
     float scaleSig2ITuk2I = 0; // inverse squared Tukey parameter scaled by scaleSigma2
     bool useConstraint = true;
     bool fillErrors = true;
-
+    int nStuck = 0;
     StatAccumulator statDZNeg, statDZPos;
     StatAccumulator statDTNeg, statDTPos;
     
@@ -102,8 +115,8 @@ public:
     void print() const
     {
       auto terr2 = tMeanAccErr > 0 ? 1./tMeanAccErr : 0.;
-      printf("VtxSeed: Scale: %+e ScalePrev: %+e | WChi2: %e WSum: %e | TMean: %e TMeanE: %e\n",
-             scaleSigma2, scaleSigma2Prev, wghChi2, wghSum, tMeanAcc*terr2, std::sqrt(terr2));
+      printf("VtxSeed: Scale: %+e ScalePrev: %+e |NStuck: %d| WChi2: %e WSum: %e | TMean: %e TMeanE: %e\n",
+             scaleSigma2, scaleSigma2Prev, nStuck, wghChi2, wghSum, tMeanAcc*terr2, std::sqrt(terr2));
       double dZP, rmsZP, dZN, rmsZN, dTP, rmsTP, dTN, rmsTN;
       double dZ, rmsZ, dT, rmsT;
       statDZNeg.getMeanRMS2(dZN, rmsZN);
@@ -114,10 +127,10 @@ public:
       auto statDT = statDTNeg+statDTPos;
       statDZ.getMeanRMS2(dZ, rmsZ);
       statDT.getMeanRMS2(dT, rmsT);
-      printf("DZN: %+e / %e | DZP: %+e / %e || DZ: %+e / %e\n"
-             "DTN: %+e / %e | DTP: %+e / %e || DT: %+e / %e\n",
-             dZN, std::sqrt(rmsZN), dZP, std::sqrt(rmsZP), dZ, std::sqrt(rmsZ),
-             dTN, std::sqrt(rmsTN), dTP, std::sqrt(rmsTP), dT, std::sqrt(rmsT) );
+      printf("DZN: %+e / %e w: %.1e/%4d | DZP: %+e / %e w: %.1e/%4d || DZ: %+e / %e\n"
+             "DTN: %+e / %e w: %.1e/%4d | DTP: %+e / %e w: %.1e/%4d || DT: %+e / %e\n",
+             dZN, std::sqrt(rmsZN), statDZNeg.wsum, statDZNeg.n, dZP, std::sqrt(rmsZP), statDZPos.wsum, statDZPos.n, dZ, std::sqrt(rmsZ),
+             dTN, std::sqrt(rmsTN), statDTNeg.wsum, statDTNeg.n, dTP, std::sqrt(rmsTP), statDTPos.wsum, statDTPos.n, dT, std::sqrt(rmsT) );
       Vertex::print();
     }
   };
@@ -155,12 +168,15 @@ public:
     }
     bool operator<(const Track &trc) const { return z < trc.z; }
 
+    float getZForXY(float vx, float vy) const {
+      return z + tgL * (vx * cosAlp + vy * sinAlp - x)
+    }
+    
     float getResiduals(const Vertex &vtx, float &dy, float &dz) const {
       // get residuals (Y and Z DCA in track frame) and calculate chi2
-      float dx = vtx.getX() * cosAlp + vtx.getY() * sinAlp -
-                 x; // VX rotated to track frame - trackX
+      float dx = vtx.getX() * cosAlp + vtx.getY() * sinAlp - x; // VX rotated to track frame - trackX
       dy = y + tgP * dx - (-vtx.getX() * sinAlp + vtx.getY() * cosAlp);
-      dz = z + tgP * dx - vtx.getZ();
+      dz = z + tgL * dx - vtx.getZ();
       return (dy * dy * sig2YI + dz * dz * sig2ZI) + 2.* dy * dz * sigYZI;
     }
 
@@ -178,11 +194,13 @@ public:
     }
   };
 
+  void init();
+
   bool fitVertex(gsl::span<Track> pool, gsl::span<int> idxsort, Vertex &vtx,
                  float scaleSigma2, bool useConstraint, bool fillError);
   FitStatus fitIteration(gsl::span<Vertexer::Track> tracks,
                          gsl::span<int> idxsort,
-                         Vertexer::VertexSeed &vtxseed) const;
+                         Vertexer::VertexSeed &vtxSeed) const;
   void setConstraint(float x, float y, float sigyy, float sigyz, float sigzz);
 
   void setTukey(float t) {
@@ -207,7 +225,17 @@ private:
   bool solveVertex(VertexSeed &vtxSeed) const;
   bool stopIterations(VertexSeed &vtxSeed, Vertex &vtx) const;
   TimeEst timeEstimate(gsl::span<Vertexer::Track> tracks, gsl::span<int> idxsort) const;
-
+  void fillZSeedHisto(gsl::span<Vertexer::Track> tracks, gsl::span<int> idxsort);
+  
+  int getZSeedBin(float z) {
+    auto dz = z+mSeedZRange;
+    if (dz<0.) {
+      return 0;
+    }
+    uint32_t n = dz*mSeedZBinSizeInv;
+    return n<mSeedZHisto.size() ? n : mSeedZHisto.size()-1;
+  }
+  
   //___________________________________________________________________
   void applyConstraint(VertexSeed &vtxSeed) const {
     // impose meanVertex constraint, i.e. account terms
@@ -229,18 +257,24 @@ private:
     return false;
   }
 
-  std::array<float, 2> mXYConstraint = {0.f,
-                                        0.f}; ///< nominal vertex constraint
-  std::array<float, 3> mXYConstraintInvErr = {
-      1.0f, 0.f, 1.0f}; ///< nominal vertex constraint inverted errors^2
+  std::array<float, 2> mXYConstraint = {0.f, 0.f}; ///< nominal vertex constraint
+  std::array<float, 3> mXYConstraintInvErr = {1.0f, 0.f, 1.0f}; ///< nominal vertex constraint inverted errors^2
   //
   float mTukey2I = 1. / (kDefTukey * kDefTukey); ///< 1./[Tukey parameter]^2
   float mMinScale2 = 1.;                         ///< min slaling factor^2
   float mMaxScale2 = 1.e6;                       ///< max slaling factor^2
   float mMaxChi2Change = 0.001; ///< max chi2 change to continue iterations
 
+  // seeding
+  float mSeedZRange = 20;
+  float mSeedZBinSize = 0.5;
+  float mSeedZBinSizeInv = 0.;
+  int mSeedsFilled = 0;
+  std::vector<int> mSeedZHisto;
+  
   int mMinTracksPerVtx = 2;                  ///< min N tracks per vertex
   int mMaxIterations = 100;                  ///< max iterations per vertex fit
+  int mMaxNStuck = 1;                        ///< max number of scaling-non-decreasing iterations
   static constexpr float kDefTukey = 5.0f;   ///< def.value for tukey constant
   static constexpr float kHugeF = 1.e12;     ///< very large float
   static constexpr float kAlmost0F = 1e-12;  ///< tiny float
