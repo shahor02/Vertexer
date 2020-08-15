@@ -2,12 +2,16 @@ SetDBGMode(1)
 .L Vertexer.cxx+g
 .L pv.C+g
 Vertexer vtf;
-vtf.init();
-Vertex vtx
-float scaleSigma2 = 1000;
-pv("pbpbB25")
-gsl::span<int> sp(&mSortID[5889],1913);
 
-//vtx.setXYZ(0.1173247,-0.100006,-1.821834);
-vtf.fitVertex(mTracksPool, sp, vtx, scaleSigma2, false, true)
+Vertexer::VertexingInput inp;
 
+pv("pbpbB25");
+
+inp.tracks = gsl::span<Vertexer::Track>(mTracksPool);
+inp.idxsort = gsl::span<int>(&mSortID[5889],1913);
+
+std::vector<Vertex> vertieces;
+std::vector<V2TRef> v2tRefs;
+std::vector<int> vertexTrackIDs;
+
+vtf.findVertices(inp, vertieces, vertexTrackIDs, v2tRefs);

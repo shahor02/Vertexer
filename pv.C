@@ -1,5 +1,3 @@
-#include "CommonDataFormat/RangeReference.h"
-#include "CommonDataFormat/TimeStamp.h"
 #include "DetectorsBase/GeometryManager.h"
 #include "DetectorsBase/Propagator.h"
 #include "DetectorsCommonDataFormats/NameConf.h"
@@ -21,8 +19,6 @@
 
 namespace o2d = o2::dataformats;
 
-using V2TRef = o2d::RangeReference<int, int>;
-using TimeEst = o2d::TimeStampWithError<float, float>;
 using TrackVF = Vertexer::Track;
 using Track = o2::track::TrackParCov;
 
@@ -94,7 +90,6 @@ float mBz = 0;
 
 void createTracksPool();
 void clusterizeTime(gsl::span<TrackVF> pool, gsl::span<int> idxsort, double margin2=1., double cut=25);
-void finalizeVertex(Vertex vtx, gsl::span<TrackVF> pool, gsl::span<int> idxsort);
 
 void pv(std::string dataDir = "./data",
         const std::string &itstpcTrFName = "o2match_itstpc.root",
@@ -192,23 +187,6 @@ void createTracksPool() {
   }
 }
 
-void finalizeVertex(Vertex vtx, gsl::span<TrackVF> pool, gsl::span<int> idxsort) {
-  int lastID = mVertices.size();
-  mVertices.emplace_back(vtx);
-  auto &ref = mV2TRefs.emplace_back(mVertexTrackIDs.size(), 0);
-  for (int i : idxsort) {
-    if (pool[i].canAssign()) {
-      mVertexTrackIDs.push_back(pool[i].entry);
-      pool[i].vtxID = lastID;
-      // remove track from ZSeeds histo
-      auto bin = getZSeedBin( pool[i].getZForXY(mXYConstraint[0],mXYConstraint[1]) );
-      //      mZSeedHisto[bin]--;
-      //      mZSeedsFilled--;
-    }
-  }
-  ref.setEntries(vtx.getNContributors());
-}
-
 void clusterizeTime(gsl::span<TrackVF> pool, gsl::span<int> idxsort, double margin2, double cut)
 {
   intTimes.clear();
@@ -236,7 +214,9 @@ void fitVertex(Vertexer &vtf, gsl::span<TrackVF> pool, gsl::span<int> idxsort) {
   std::vector<TrackVF> seeds(idxsort.size());
   Vertex vtx;
   float scaleSigma2 = 100;
+  /*
   while (vtf.fitVertex(pool, idxsort, vtx, scaleSigma2, false, false)) {
     finalizeVertex(vtx, pool, idxsort);
   }
+  */
 }

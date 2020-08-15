@@ -4,6 +4,7 @@
 #include <array>
 
 #include "CommonDataFormat/TimeStamp.h"
+#include "CommonDataFormat/RangeReference.h"
 #include "MathUtils/Utils.h"
 #include "ReconstructionDataFormats/Track.h"
 #include "ReconstructionDataFormats/Vertex.h"
@@ -11,6 +12,8 @@
 
 using TimeEst = o2::dataformats::TimeStampWithError<float, float>; // FIXME
 using Vertex = o2::dataformats::Vertex<TimeEst>;
+using V2TRef = o2::dataformats::RangeReference<int, int>;
+
 
 class Vertexer {
 
@@ -156,6 +159,7 @@ public:
     TimeEst timeEst;
     float wgh = 0.; ///< track weight wrt current vertex seed
     uint32_t entry = 0;
+    int16_t bin = -1; // seeds histo bin
     uint8_t srcID = 0;
     uint8_t flags = 0;
     int vtxID = kNoVtx; ///< assigned vertex
@@ -169,7 +173,7 @@ public:
     bool operator<(const Track &trc) const { return z < trc.z; }
 
     float getZForXY(float vx, float vy) const {
-      return z + tgL * (vx * cosAlp + vy * sinAlp - x)
+      return z + tgL * (vx * cosAlp + vy * sinAlp - x);
     }
     
     float getResiduals(const Vertex &vtx, float &dy, float &dz) const {
@@ -194,13 +198,92 @@ public:
     }
   };
 
-  void init();
+  struct VertexingInput {
+    gsl::span<Vertexer::Track> tracks;
+    gsl::span<int> idxsort;
+    float scaleSigma2 = 10;
+    bool useConstraint = false;
+    bool fillErrors = true;
 
-  bool fitVertex(gsl::span<Track> pool, gsl::span<int> idxsort, Vertex &vtx,
-                 float scaleSigma2, bool useConstraint, bool fillError);
-  FitStatus fitIteration(gsl::span<Vertexer::Track> tracks,
-                         gsl::span<int> idxsort,
-                         Vertexer::VertexSeed &vtxSeed) const;
+    ClassDefNV(VertexingInput,1);
+  };
+
+  struct SeedHisto {
+    float range = 20;
+    float binSize = 0.5;
+    float binSizeInv = 0.;
+    int nFilled = 0;
+    std::vector<int> data;
+
+    int size() const { return data.size(); }
+    
+    void init(float _range = 20., float _binsize = 0.5) {
+      range = _range;
+      binSize = _binsize;
+      auto zr = 2*range;
+      int nzb = zr/binSize;
+      if (nzb*binSize<zr-Vertexer::kAlmost0F) {
+        nzb++;
+      }
+      binSizeInv = 1./binSize;
+      range = nzb*binSize/2.;
+      data.resize(nzb);
+    }
+
+    void fill(float z) {
+      incrementBin(findBin(z));
+    }
+
+    void incrementBin(int bin) {
+      data[bin]++;
+      nFilled++;
+    }
+
+    void decrementBin(int bin) {
+      data[bin]--;
+      nFilled--;
+    }
+    
+    int findBin(float z) {
+      auto d = z+range;
+      if (d<0.) {
+        return 0;
+      }
+      uint32_t n = d*binSizeInv;
+      return n<data.size() ? n : data.size()-1;
+    }
+
+    int findHighestPeakBin() const {
+      if (nFilled<2) {
+        return -1;
+      }
+      int n = data.size(), maxBin = -1, maxv = 0;
+      for (int i=0;i<n;i++) {
+        if (data[i]>maxv) {
+          maxv = data[(maxBin=i)];
+        }
+      }
+      return maxBin;
+    }
+
+    bool isValidBin(int ib) const {
+      return static_cast<uint32_t>(ib)<data.size();
+    }
+    
+    float getBinCenter(int ib) const {
+      return (ib+0.5)*binSize - range; // no check for being in the range!!!
+    }
+
+    void discardBin(int ib) { // no check for being in the range!!!
+      nFilled -= data[ib];
+      data[ib] = 0;
+    }
+  };
+  
+  void init();
+  bool findVertices(const VertexingInput& input, std::vector<Vertex> &vertices, std::vector<int>& vertexTrackIDs, std::vector<V2TRef>& v2tRefs);
+  bool findVertex(const VertexingInput& input, Vertex &vtx);
+  FitStatus fitIteration(const VertexingInput& input, Vertexer::VertexSeed &vtxSeed) const;
   void setConstraint(float x, float y, float sigyy, float sigyz, float sigzz);
 
   void setTukey(float t) {
@@ -220,21 +303,15 @@ public:
   void setMaxChi2Change(float v) { mMaxChi2Change = v > 1.e-3 ? v : 1.e-3; }
   float getMaxChi2Change() const { return mMaxChi2Change; }
 
-private:
+  void finalizeVertex(const VertexingInput& input, const Vertex& vtx, std::vector<Vertex>& vertices, std::vector<V2TRef>& v2tRefs, std::vector<int> &vertexTrackIDs, SeedHisto& histo);
+  
+ private:
   void accountTrack(Track &trc, VertexSeed &vtxSeed) const;
   bool solveVertex(VertexSeed &vtxSeed) const;
   bool stopIterations(VertexSeed &vtxSeed, Vertex &vtx) const;
-  TimeEst timeEstimate(gsl::span<Vertexer::Track> tracks, gsl::span<int> idxsort) const;
-  void fillZSeedHisto(gsl::span<Vertexer::Track> tracks, gsl::span<int> idxsort);
-  
-  int getZSeedBin(float z) {
-    auto dz = z+mSeedZRange;
-    if (dz<0.) {
-      return 0;
-    }
-    uint32_t n = dz*mSeedZBinSizeInv;
-    return n<mSeedZHisto.size() ? n : mSeedZHisto.size()-1;
-  }
+  TimeEst timeEstimate(const VertexingInput& input) const;
+  float findZSeedHistoPeak() const;
+
   
   //___________________________________________________________________
   void applyConstraint(VertexSeed &vtxSeed) const {
@@ -264,13 +341,6 @@ private:
   float mMinScale2 = 1.;                         ///< min slaling factor^2
   float mMaxScale2 = 1.e6;                       ///< max slaling factor^2
   float mMaxChi2Change = 0.001; ///< max chi2 change to continue iterations
-
-  // seeding
-  float mSeedZRange = 20;
-  float mSeedZBinSize = 0.5;
-  float mSeedZBinSizeInv = 0.;
-  int mSeedsFilled = 0;
-  std::vector<int> mSeedZHisto;
   
   int mMinTracksPerVtx = 2;                  ///< min N tracks per vertex
   int mMaxIterations = 100;                  ///< max iterations per vertex fit

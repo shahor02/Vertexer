@@ -8,25 +8,64 @@ constexpr float Vertexer::kHugeF;
 constexpr float Vertexer::kDefTukey;
 
 //______________________________________________
-bool Vertexer::fitVertex(gsl::span<Vertexer::Track> tracks,
-                         gsl::span<int> idxsort, Vertex &vtx, float scaleSigma2,
-                         bool useConstraint, bool fillErrors)
+bool Vertexer::findVertices(const Vertexer::VertexingInput& input, std::vector<Vertex> &vertices, std::vector<int>& vertexTrackIDs, std::vector<V2TRef>& v2tRefs)
 {
-  // fit vertex taking provided vertex as a seed
-  // tracks pool may contain arbitrary number of tracks, only those which are in
-  // the idxsort (indices of tracks sorted in time) will be used.
+  // find vertices using tracks with indices (sorted in time) from idxsort from "tracks" pool. The pool may containt arbitrary number of tracks,
+  // only those which are in the idxsort and have canUse()==true, will be used.
+  // Results are placed in vertices and v2tRefs vectors
 
-  int ntAcc = 0, ntr = idxsort.size();
+  int ntr = input.idxsort.size();
   if (ntr < mMinTracksPerVtx) {
     return false;
   }
   //
-  fillZSeedHisto(tracks, idxsort);
+  Vertexer::SeedHisto seedHisto;
+  seedHisto.init();
+  for (int i : input.idxsort) {
+    if (input.tracks[i].canUse()) {
+      input.tracks[i].bin = seedHisto.findBin( input.tracks[i].getZForXY(mXYConstraint[0],mXYConstraint[1]) );
+      seedHisto.incrementBin( input.tracks[i].bin );
+    }
+  }
+  if (seedHisto.nFilled < mMinTracksPerVtx) {
+    return false;
+  }
   
-  VertexSeed vtxSeed(vtx, useConstraint, fillErrors);
-  vtxSeed.setScale(scaleSigma2, mTukey2I);
-  vtxSeed.scaleSigma2Prev = scaleSigma2;
-  vtxSeed.setTimeStamp( timeEstimate(tracks, idxsort) );
+  while(1) {
+    int peakBin = seedHisto.findHighestPeakBin();  // find next seed
+    if (!seedHisto.isValidBin(peakBin)) {
+      break;
+    }
+    float zv = seedHisto.getBinCenter(peakBin);
+    LOG(INFO) << "Seeding with Z=" << zv << " bin " << peakBin;
+    Vertex vtx;
+    vtx.setXYZ(mXYConstraint[0], mXYConstraint[1], zv);
+    bool res = findVertex(input, vtx);
+    if (res) {
+      finalizeVertex(input, vtx, vertices, v2tRefs, vertexTrackIDs, seedHisto);
+    }
+    else { // empty the bins around failed seed
+      const int proximity = 5;
+      int bmin = std::max(0, peakBin - proximity), bmax = std::min(peakBin + proximity+1, seedHisto.size());      
+      for (int i=bmin;i<bmax;i++) {
+        seedHisto.discardBin(i); 
+      }      
+    }    
+  }
+  return vertices.size();
+}
+
+//______________________________________________
+bool Vertexer::findVertex(const Vertexer::VertexingInput& input, Vertex &vtx)
+{
+  // fit vertex taking provided vertex as a seed
+  // tracks pool may contain arbitrary number of tracks, only those which are in
+  // the idxsort (indices of tracks sorted in time) will be used.
+  
+  VertexSeed vtxSeed(vtx, input.useConstraint, input.fillErrors);
+  vtxSeed.setScale(input.scaleSigma2, mTukey2I);
+  vtxSeed.scaleSigma2Prev = input.scaleSigma2;
+  vtxSeed.setTimeStamp( timeEstimate(input) );
   LOG(INFO) << "Start time guess: " << vtxSeed.getTimeStamp();
   vtx.setChi2(1.e30);
   //
@@ -36,7 +75,7 @@ bool Vertexer::fitVertex(gsl::span<Vertexer::Track> tracks,
   while (it-- && (vtxSeed.scaleSigma2 > mMinScale2 || vtxSeed.scaleSigma2!=vtxSeed.scaleSigma2Prev)) {
     LOG(INFO) << "iter " << it << " with scale=" << vtxSeed.scaleSigma2 << " prevScale=" << vtxSeed.scaleSigma2Prev;
     vtxSeed.resetForNewIteration();
-    result = fitIteration(tracks, idxsort, vtxSeed);
+    result = fitIteration(input, vtxSeed);
 
     if (result == FitStatus::OK) {
       found = stopIterations(vtxSeed, vtx);
@@ -63,18 +102,17 @@ bool Vertexer::fitVertex(gsl::span<Vertexer::Track> tracks,
 }
 
 //___________________________________________________________________
-Vertexer::FitStatus Vertexer::fitIteration(gsl::span<Vertexer::Track> tracks, gsl::span<int> idxsort, Vertexer::VertexSeed &vtxSeed) const
+Vertexer::FitStatus Vertexer::fitIteration(const Vertexer::VertexingInput& input, Vertexer::VertexSeed &vtxSeed) const
 {
   int nTested = 0;
-  for (int i : idxsort) {
-    if (tracks[i].canUse()) {
+  for (int i : input.idxsort) {
+    if (input.tracks[i].canUse()) {
       nTested++;
-      accountTrack(tracks[i], vtxSeed);
+      accountTrack(input.tracks[i], vtxSeed);
     }
   }
   if (vtxSeed.getNContributors() < mMinTracksPerVtx) {
-    return nTested < mMinTracksPerVtx ? FitStatus::PoolEmpty
-                                      : FitStatus::NotEnoughTracks;
+    return nTested < mMinTracksPerVtx ? FitStatus::PoolEmpty : FitStatus::NotEnoughTracks;
   }
   if (vtxSeed.useConstraint) {
     applyConstraint(vtxSeed);
@@ -180,7 +218,7 @@ bool Vertexer::solveVertex(Vertexer::VertexSeed &vtxSeed) const
   
   vtxSeed.setChi2(2.f * (vtxSeed.getNContributors() - vtxSeed.wghSum) / vtxSeed.scaleSig2ITuk2I); // calculate chi^2
   auto newScale = vtxSeed.wghChi2 / vtxSeed.wghSum;
-  LOG(INFO) << "Solve: wghChi2=" << vtxSeed.wghChi2 << " wghSum=" << vtxSeed.wghSum << " -> scale= " << newScale << " old scale " << vtxSeed.scaleSigma2Prev;
+  LOG(INFO) << "Solve: wghChi2=" << vtxSeed.wghChi2 << " wghSum=" << vtxSeed.wghSum << " -> scale= " << newScale << " old scale " << vtxSeed.scaleSigma2 << " prevScale: " << vtxSeed.scaleSigma2Prev;
   vtxSeed.print();
   vtxSeed.setScale(newScale < mMinScale2 ? mMinScale2 : newScale, mTukey2I);
   return true;
@@ -280,12 +318,12 @@ float Vertexer::getTukey() const
 }
 
 //___________________________________________________________________
-TimeEst Vertexer::timeEstimate(gsl::span<Vertexer::Track> tracks, gsl::span<int> idxsort) const
+TimeEst Vertexer::timeEstimate(const VertexingInput& input) const
 {
   StatAccumulator test;
-  for (int i : idxsort) {
-    if (tracks[i].canUse()) {
-      const auto &timeT = tracks[i].timeEst;
+  for (int i : input.idxsort) {
+    if (input.tracks[i].canUse()) {
+      const auto &timeT = input.tracks[i].timeEst;
       auto trErr2I = 1. / (timeT.getTimeStampError() * timeT.getTimeStampError());
       test.add(timeT.getTimeStamp(), trErr2I);
     }
@@ -300,7 +338,7 @@ TimeEst Vertexer::timeEstimate(gsl::span<Vertexer::Track> tracks, gsl::span<int>
   }
   /*
   double t = 0., te = 0.;
-  for (int i : idxsort) {
+  for (int i : id2use) {
     if (tracks[i].canUse()) {
       const auto &timeT = tracks[i].timeEst;
       auto trErr2I = 1. / (timeT.getTimeStampError() * timeT.getTimeStampError());
@@ -321,26 +359,24 @@ TimeEst Vertexer::timeEstimate(gsl::span<Vertexer::Track> tracks, gsl::span<int>
 //___________________________________________________________________
 void Vertexer::init()
 {
-  auto zr = 2*mSeedZRange;
-  int nzb = zr/mSeedZBinSize;
-  if (nzb*zr<zr-1e-6) {
-    nzb++;
-  }
-  mSeedZBinSizeInv = 1./mSeedZBinSize;
-  mSeedZRange = nzb*zr/2.;
-  mSeedZHisto.resize(nzb);
 }
 
-//___________________________________________________________________
-void Vertexer::fillZSeedHisto(gsl::span<Vertexer::Track> tracks, gsl::span<int> idxsort)
+
+void Vertexer::finalizeVertex(const Vertexer::VertexingInput& input, const Vertex &vtx,
+                              std::vector<Vertex>& vertices, std::vector<V2TRef>& v2tRefs, std::vector<int> &vertexTrackIDs,
+                              Vertexer::SeedHisto& histo)
 {
-  memset(mSeedZHisto.data(),0,mSeedZHisto.size()*sizeof(int));
-  mZSeedsFilled = 0;
-  for (int i : idxsort) {
-    if (tracks[i].canUse()) {
-      auto bin = getZSeedBin( tracks[i].getZForXY(mXYConstraint[0],mXYConstraint[1]) );
-      mSeedZHisto[bin]++;
-      mZSeedsFilled++;
+  int lastID = vertices.size();
+  vertices.emplace_back(vtx);
+  auto &ref = v2tRefs.emplace_back(vertexTrackIDs.size(), 0);
+  for (int i : input.idxsort) {
+    if (input.tracks[i].canAssign()) {
+      vertexTrackIDs.push_back( input.tracks[i].entry );
+      input.tracks[i].vtxID = lastID;
+
+      // remove track from ZSeeds histo
+      histo.decrementBin( input.tracks[i].bin );
     }
   }
+  ref.setEntries( vertexTrackIDs.size() - ref.getFirstEntry() );
 }
